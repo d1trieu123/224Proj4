@@ -205,3 +205,10 @@ questions:
 once we encode the hash is there any way to decode it?
 how do we acess the daa from the hash value when we add the blocks
 //
+
+project 4 quesitons:
+check add to block store for the right logic
+the consistent hash ring holds the servers as hashes?
+access the hashes in the blockstore map?
+the hash correspond to he correct map
+do we evern need to access the consistent hash ring?

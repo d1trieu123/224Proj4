@@ -2,10 +2,7 @@ package surfstore
 
 import (
 	context "context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"sort"
 
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
@@ -43,46 +40,20 @@ func (m *MetaStore) UpdateFile(ctx context.Context, fileMetaData *FileMetaData) 
 // Returns a mapping from block server address to block hashes.
 func (m *MetaStore) GetBlockStoreMap(ctx context.Context, blockHashesIn *BlockHashes) (*BlockStoreMap, error) {
 	BlockMap := map[string]*BlockHashes{}
-	BlockStoreAddr := m.BlockStoreAddrs
-	consistentHashRing := make(map[string]string) // hash: serverName
-	for _, serverName := range BlockStoreAddr {
-		serverHash := Hash_to_string(serverName)
-		consistentHashRing[serverHash] = serverName
-	}
-	//copied from discussion code
-	hashes := []string{}
-	for h := range consistentHashRing {
-		hashes = append(hashes, h)
-	}
-	sort.Strings(hashes)
-	for _, hashIn := range blockHashesIn.GetHashes() {
-		blockHash := Hash_to_string(hashIn)
-		responsibleServer := ""
-		for i := 0; i < len(hashes); i++ {
-			if hashes[i] > blockHash {
-				responsibleServer = consistentHashRing[hashes[i]]
-				break
-			}
+
+	for _, blockHash := range blockHashesIn.Hashes {
+		blockStoreAddr := m.ConsistentHashRing.GetResponsibleServer(blockHash)
+		if _, ok := BlockMap[blockStoreAddr]; !ok {
+			BlockMap[blockStoreAddr] = &BlockHashes{Hashes: []string{}}
 		}
-		if responsibleServer == "" {
-			responsibleServer = consistentHashRing[hashes[0]]
-		}
-		if _, ok := BlockMap[responsibleServer]; !ok {
-			BlockMap[responsibleServer] = &BlockHashes{}
-		}
-		BlockMap[responsibleServer].Hashes = append(BlockMap[responsibleServer].Hashes, hashIn)
+		BlockMap[blockStoreAddr].Hashes = append(BlockMap[blockStoreAddr].Hashes, blockHash)
 	}
+
 	return &BlockStoreMap{BlockStoreMap: BlockMap}, nil
 }
 
 func (m *MetaStore) GetBlockStoreAddrs(ctx context.Context, _ *emptypb.Empty) (*BlockStoreAddrs, error) {
 	return &BlockStoreAddrs{BlockStoreAddrs: m.BlockStoreAddrs}, nil
-}
-
-func Hash_to_string(addr string) string {
-	h := sha256.New()
-	h.Write([]byte(addr))
-	return hex.EncodeToString(h.Sum(nil))
 }
 
 // This line guarantees all method for MetaStore are implemented

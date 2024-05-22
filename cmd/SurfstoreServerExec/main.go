@@ -81,6 +81,7 @@ func startServer(hostAddr string, serviceType string, blockStoreAddrs []string) 
 			return err
 		}
 		fmt.Printf("Starting MetaStore Server on %s\n", hostAddr)
+		fmt.Println("BlockStoreAddrs: ", blockStoreAddrs)
 		return metaServer.Serve(l)
 	} else if serviceType == "block" {
 		blockServer := grpc.NewServer()

@@ -1,6 +1,7 @@
 package surfstore
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -146,19 +147,27 @@ func ClientSync(client RPCClient) {
 	if err != nil {
 		log.Fatal("Error getting remote index")
 	}
-	// fmt.Println("REMOTE INDEX LOADED FROM SERVER")
+	fmt.Println("REMOTE INDEX LOADED FROM SERVER")
 	PrintMetaMap(remoteIndex)
 	remoteBlockStoreAddrs := []string{}
-
 	//load all the block store address
 	err = rpcClient.GetBlockStoreAddrs(&remoteBlockStoreAddrs)
 	if err != nil {
 		log.Fatal("Error getting block store address")
 	}
-	// fmt.Println("REMOTE BLOCK STORE ADDRESS: " + remoteBlockStoreAddr)
+
+	for _, blockStoreAddr := range remoteBlockStoreAddrs {
+		fmt.Println("Block Store Address: ", blockStoreAddr)
+	}
+
 	//compare the remote index with the updated local index
 	finalMetaMap := make(map[string]*FileMetaData)
 	for fileName, localFileMetaData := range updatedLocalIndex {
+		blockMap := make(map[string][]string)
+		err = rpcClient.GetBlockStoreMap(localFileMetaData.BlockHashList, &blockMap)
+		if err != nil {
+			log.Fatal("Error getting block store map")
+		}
 		// file in local index but not remote index, add it to the remote index
 		if _, ok := remoteIndex[fileName]; !ok {
 			// fmt.Println("FILE: " + fileName + " IN LOCAL INDEX BUT NOT IN REMOTE INDEX")
@@ -166,7 +175,7 @@ func ClientSync(client RPCClient) {
 			if err != nil {
 				log.Fatal("Error updating file")
 			}
-			addToBlockStore(rpcClient, localFileMetaData, remoteBlockStoreAddrs, hashToData)
+			addToBlockStore(rpcClient, localFileMetaData, remoteBlockStoreAddrs, hashToData, blockMap)
 			finalMetaMap[fileName] = localFileMetaData
 
 		} else { // file in both local and remote index, compare the version and hash list and update as necessary
@@ -185,7 +194,7 @@ func ClientSync(client RPCClient) {
 					continue
 				}
 				// edit the file in the base directory to match the remote file
-				editFile(filePath, remoteFileMetaData, rpcClient, remoteBlockStoreAddrs)
+				editFile(filePath, remoteFileMetaData, rpcClient)
 				finalMetaMap[fileName] = remoteFileMetaData
 			} else if localFileMetaData.Version == remoteFileMetaData.Version { //check hash list for differences this means someone else has pushed first
 				// fmt.Println("LOCAL FILE " + fileName + " HAS SAME VERSION AS REMOTE FILE, CHECKING HASH LIST")
@@ -197,7 +206,7 @@ func ClientSync(client RPCClient) {
 				} else {
 					// edit the file in the base directory to match the remote file
 					filePath := baseDir + "/" + fileName
-					editFile(filePath, remoteFileMetaData, rpcClient, remoteBlockStoreAddrs)
+					editFile(filePath, remoteFileMetaData, rpcClient)
 					finalMetaMap[fileName] = remoteFileMetaData
 				}
 
@@ -207,7 +216,7 @@ func ClientSync(client RPCClient) {
 				if err != nil {
 					log.Fatal("Error updating file")
 				}
-				addToBlockStore(rpcClient, localFileMetaData, remoteBlockStoreAddrs, hashToData)
+				addToBlockStore(rpcClient, localFileMetaData, remoteBlockStoreAddrs, hashToData, blockMap)
 				finalMetaMap[fileName] = localFileMetaData
 			} else { //invalid version number
 				// fmt.Println("INVALID VERSION NUMBER")
@@ -234,19 +243,20 @@ func ClientSync(client RPCClient) {
 				log.Fatal("Error creating file")
 			}
 			defer file.Close()
-			for _, hash := range remoteFileMetaData.BlockHashList {
-				var block Block
-				err := rpcClient.GetBlock(hash, remoteBlockStoreAddr, &block)
-				if err != nil {
-					log.Fatal("Error getting block" + err.Error())
-				}
-				// add the block to the block list and write to the file
-				blockData := block.BlockData
-				_, err = file.Write(blockData)
-				if err != nil {
-					log.Fatal("Error writing block to file")
-				}
-			}
+			writeToFile(remoteFileMetaData.BlockHashList, file, rpcClient)
+			// for _, hash := range remoteFileMetaData.BlockHashList {
+			// 	var block Block
+			// 	err := rpcClient.GetBlock(hash, remoteBlockStoreAddr, &block)
+			// 	if err != nil {
+			// 		log.Fatal("Error getting block" + err.Error())
+			// 	}
+			// 	// add the block to the block list and write to the file
+			// 	blockData := block.BlockData
+			// 	_, err = file.Write(blockData)
+			// 	if err != nil {
+			// 		log.Fatal("Error writing block to file")
+			// 	}
+			// }
 			// add the file to the local index
 			finalMetaMap[key] = remoteFileMetaData
 		}
@@ -296,50 +306,55 @@ func contains(s []string, e string) bool {
 	return false
 }
 
-func addToBlockStore(client RPCClient, fileMetaData *FileMetaData, blockStoreAddrs []string, hashToData map[string][]byte) {
-	// fmt.Println("ADDING FILE TO BLOCK STORE AT ADDRESS: " + blockStoreAddr)
-	var success bool
-	blockStoreMap := make(map[string][]string)
-	err := client.GetBlockStoreMap(fileMetaData.BlockHashList, &blockStoreMap)
+func writeToFile(hashList []string, file *os.File, client RPCClient) {
+	blockMap := make(map[string][]string)
+	err := client.GetBlockStoreMap(hashList, &blockMap)
 	if err != nil {
 		log.Fatal("Error getting block store map")
 	}
-	for addr, hashList := range blockStoreMap {
-		// fmt.Println("BLOCK STORE ADDRESS: " + addr)
-		// fmt.Println("HASH LIST: ", hashList)
+	for _, hash := range hashList {
+		for blockStoreAddr, hashList := range blockMap {
+			if contains(hashList, hash) {
+				var block Block
+				err := client.GetBlock(hash, blockStoreAddr, &block)
+				if err != nil {
+					log.Fatal("Error getting block" + err.Error())
+				}
+				// add the block to the block list and write to the file
+				blockData := block.BlockData
+				_, err = file.Write(blockData)
+				if err != nil {
+					log.Fatal("Error writing block to file")
+				}
+			}
+		}
+	}
+
+}
+
+func addToBlockStore(client RPCClient, fileMetaData *FileMetaData, blockStoreAddrs []string, hashToData map[string][]byte, blockMap map[string][]string) {
+	fmt.Println("ADDING FILE TO BLOCK STORE")
+	var success bool
+	for blockStoreAddr, hashList := range blockMap {
 		for _, hash := range hashList {
 			var block Block
 			blockData := hashToData[hash]
-			// fmt.Println("Block data: ", blockData)
 			block.BlockData = blockData
 			block.BlockSize = int32(len(blockData))
-			err := client.PutBlock(&block, addr, &success)
+			err := client.PutBlock(&block, blockStoreAddr, &success)
 			if err != nil {
 				log.Fatal("Error putting block" + err.Error())
 			}
 		}
 	}
-
-	// for _, hash := range fileMetaData.BlockHashList {
-	// 	var block Block
-	// 	blockData := hashToData[hash]
-	// 	// fmt.Println("Block data: ", blockData)
-	// 	block.BlockData = blockData
-	// 	block.BlockSize = int32(len(blockData))
-	// 	err := client.PutBlock(&block, blockStoreAddr, &success)
-	// 	if err != nil {
-	// 		log.Fatal("Error putting block" + err.Error())
-	// 	}
-	// }
-
 }
 
-func editFile(filePath string, fileMetaData *FileMetaData, client RPCClient, blockStoreAddrs []string) {
+func editFile(filePath string, fileMetaData *FileMetaData, client RPCClient) {
 	//delete the current file
 
 	err := os.Remove(filePath)
 	if err != nil {
-		// fmt.Println("file doesn't need to be removed")
+		fmt.Println("file doesn't need to be removed")
 	}
 	//reconstitute the file
 	if fileMetaData.BlockHashList[0] == "0" {
@@ -351,19 +366,21 @@ func editFile(filePath string, fileMetaData *FileMetaData, client RPCClient, blo
 		log.Fatal("Error creating file")
 	}
 	defer file.Close()
-	for _, hash := range fileMetaData.BlockHashList {
-		var block Block
-		err := client.GetBlock(hash, blockStoreAddr, &block)
-		if err != nil {
-			log.Fatal("Error getting block" + err.Error())
-		}
-		// add the block to the block list
-		blockData := block.BlockData
-		_, err = file.Write(blockData)
-		if err != nil {
-			log.Fatal("Error writing block to file")
-		}
-	}
+	writeToFile(fileMetaData.BlockHashList, file, client)
+	// for _, hash := range fileMetaData.BlockHashList {
+	// 	var block Block
+	// 	blockStoreAddr := RPCClient.GetResponsibleServer(hash)
+	// 	err := client.GetBlock(hash, blockStoreAddr, &block)
+	// 	if err != nil {
+	// 		log.Fatal("Error getting block" + err.Error())
+	// 	}
+	// 	// add the block to the block list
+	// 	blockData := block.BlockData
+	// 	_, err = file.Write(blockData)
+	// 	if err != nil {
+	// 		log.Fatal("Error writing block to file")
+	// 	}
+	// }
 }
 
 func sameList(list1 []string, list2 []string) bool {
