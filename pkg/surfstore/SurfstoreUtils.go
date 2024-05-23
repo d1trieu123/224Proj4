@@ -136,7 +136,7 @@ func ClientSync(client RPCClient) {
 		}
 	}
 	// print the updated local index
-	// fmt.Println("UPDATED LOCAL INDEX AFTER COMPARISON WITH LOCAL DIRECTORY")
+	fmt.Println("UPDATED LOCAL INDEX AFTER COMPARISON WITH LOCAL DIRECTORY")
 	PrintMetaMap(updatedLocalIndex)
 
 	//load the remote index from the server
@@ -315,17 +315,20 @@ func writeToFile(hashList []string, file *os.File, client RPCClient) {
 	for _, hash := range hashList {
 		for blockStoreAddr, hashList := range blockMap {
 			if contains(hashList, hash) {
-				var block Block
-				err := client.GetBlock(hash, blockStoreAddr, &block)
-				if err != nil {
-					log.Fatal("Error getting block" + err.Error())
+				if hash != "-1" {
+					var block Block
+					err := client.GetBlock(hash, blockStoreAddr, &block)
+					if err != nil {
+						log.Fatal("Error getting block" + err.Error())
+					}
+					// add the block to the block list and write to the file
+					blockData := block.BlockData
+					_, err = file.Write(blockData)
+					if err != nil {
+						log.Fatal("Error writing block to file")
+					}
 				}
-				// add the block to the block list and write to the file
-				blockData := block.BlockData
-				_, err = file.Write(blockData)
-				if err != nil {
-					log.Fatal("Error writing block to file")
-				}
+
 			}
 		}
 	}
@@ -337,21 +340,25 @@ func addToBlockStore(client RPCClient, fileMetaData *FileMetaData, blockStoreAdd
 	var success bool
 	for blockStoreAddr, hashList := range blockMap {
 		for _, hash := range hashList {
-			var block Block
-			blockData := hashToData[hash]
-			block.BlockData = blockData
-			block.BlockSize = int32(len(blockData))
-			err := client.PutBlock(&block, blockStoreAddr, &success)
-			if err != nil {
-				log.Fatal("Error putting block" + err.Error())
+			if hash != "-1" && hash != "0" {
+				var block Block
+				blockData := hashToData[hash]
+				block.BlockData = blockData
+				block.BlockSize = int32(len(blockData))
+				err := client.PutBlock(&block, blockStoreAddr, &success)
+				if err != nil {
+					log.Fatal("Error putting block" + err.Error())
+				}
+			} else {
+				break
 			}
+
 		}
 	}
 }
 
 func editFile(filePath string, fileMetaData *FileMetaData, client RPCClient) {
 	//delete the current file
-
 	err := os.Remove(filePath)
 	if err != nil {
 		fmt.Println("file doesn't need to be removed")
